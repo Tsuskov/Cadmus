@@ -6,5 +6,4 @@ description = "A byte-level BPE tokenizer trained from scratch in Rust — the m
 license = "MIT"
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"

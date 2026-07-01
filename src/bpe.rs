@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use crate::byte_level;
 
@@ -31,13 +31,6 @@ pub struct BpeModel {
     merge_rank: HashMap<(String, String), u32>,
     encoder: [char; 256],
     decoder: HashMap<char, u8>,
-}
-
-/// The on-disk shape: just the two fields needed to reconstruct a model.
-#[derive(Serialize, Deserialize)]
-struct RawModel {
-    vocab: Vec<String>,
-    merges: Vec<(String, String)>,
 }
 
 /// Split text into words, keeping a leading space attached to the word that
@@ -206,15 +199,66 @@ impl BpeModel {
         byte_level::decode_bytes(&joined, &self.decoder)
     }
 
-    /// Serialize to JSON (`vocab` + `merges`).
-    pub fn to_json(&self) -> String {
-        let raw = RawModel { vocab: self.vocab.clone(), merges: self.merges.clone() };
-        serde_json::to_string_pretty(&raw).expect("model serializes")
+    /// Serialize to an HF `tokenizer.json`-shaped string: the exact format
+    /// `Hephaistos/src/gguf.rs` parses (`model.vocab` as token->id, `model.merges`
+    /// as `"a b"` strings) and that `talos` consumes via GGUF.
+    ///
+    /// A `<unk>` token is appended if absent: byte-level BPE never emits it (the
+    /// full 256-byte alphabet means nothing is OOV), but the GGUF writer requires
+    /// one for the special-token ids.
+    pub fn to_hf_json(&self) -> String {
+        let mut vocab_map = serde_json::Map::new();
+        for (i, tok) in self.vocab.iter().enumerate() {
+            vocab_map.insert(tok.clone(), json!(i));
+        }
+        let mut added_tokens = Vec::new();
+        if !self.token_to_id.contains_key("<unk>") {
+            let id = vocab_map.len();
+            vocab_map.insert("<unk>".to_string(), json!(id));
+            added_tokens.push(json!({ "id": id, "content": "<unk>", "special": true }));
+        }
+        let merges: Vec<String> = self.merges.iter().map(|(a, b)| format!("{a} {b}")).collect();
+
+        let doc = json!({
+            "model": { "type": "BPE", "vocab": Value::Object(vocab_map), "merges": merges },
+            "added_tokens": added_tokens,
+        });
+        serde_json::to_string_pretty(&doc).expect("model serializes")
     }
 
-    /// Load from JSON, rebuilding the derived tables.
-    pub fn from_json(json: &str) -> serde_json::Result<BpeModel> {
-        let raw: RawModel = serde_json::from_str(json)?;
-        Ok(BpeModel::finalize(raw.vocab, raw.merges, byte_level::byte_encoder()))
+    /// Load from an HF `tokenizer.json`-shaped string, honoring the file's token
+    /// ids. Reads `model.vocab` + `model.merges`; ignores everything else. Also
+    /// loads tokenizers written elsewhere (e.g. Posaidon's) as long as they are
+    /// byte-level BPE.
+    pub fn from_hf_json(json: &str) -> serde_json::Result<BpeModel> {
+        let doc: Value = serde_json::from_str(json)?;
+        let model = &doc["model"];
+
+        let vocab_obj = model["vocab"].as_object().expect("model.vocab object");
+        let mut vocab = vec![String::new(); vocab_obj.len()];
+        for (tok, id) in vocab_obj {
+            let id = id.as_u64().expect("vocab id") as usize;
+            if id >= vocab.len() {
+                vocab.resize(id + 1, String::new());
+            }
+            vocab[id] = tok.clone();
+        }
+
+        let merges = model["merges"]
+            .as_array()
+            .expect("model.merges array")
+            .iter()
+            .map(|m| match m.as_array() {
+                // ["a", "b"] form
+                Some(p) => (p[0].as_str().unwrap().to_string(), p[1].as_str().unwrap().to_string()),
+                // "a b" form (token pieces never contain a literal space)
+                None => {
+                    let (a, b) = m.as_str().unwrap().split_once(' ').expect("merge \"a b\"");
+                    (a.to_string(), b.to_string())
+                }
+            })
+            .collect();
+
+        Ok(BpeModel::finalize(vocab, merges, byte_level::byte_encoder()))
     }
 }

@@ -44,9 +44,19 @@ fn merging_shrinks_the_token_count() {
 }
 
 #[test]
-fn json_save_load_preserves_behavior() {
+fn hf_json_save_load_preserves_behavior() {
     let model = BpeModel::train(CORPUS, 320, 2);
-    let reloaded = BpeModel::from_json(&model.to_json()).unwrap();
+    let reloaded = BpeModel::from_hf_json(&model.to_hf_json()).unwrap();
     let text = "the cat sat on the hat";
     assert_eq!(model.encode(text), reloaded.encode(text));
+}
+
+#[test]
+fn hf_json_has_unk_and_is_gguf_shaped() {
+    // gguf.rs requires model.vocab (object), model.merges, and a <unk> token.
+    let model = BpeModel::train(CORPUS, 320, 2);
+    let doc: serde_json::Value = serde_json::from_str(&model.to_hf_json()).unwrap();
+    assert!(doc["model"]["vocab"].is_object());
+    assert!(doc["model"]["merges"].is_array());
+    assert!(doc["model"]["vocab"]["<unk>"].is_number(), "<unk> must be in vocab");
 }

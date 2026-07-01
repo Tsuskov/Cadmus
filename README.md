@@ -38,12 +38,13 @@ in [`src/byte_level.rs`](src/byte_level.rs).
 ## Usage
 
 ```sh
-# Train a 320-token model on a corpus.
-cargo run -- train data/sample.txt 320 model.json
+# Train a 320-token model on a corpus. The model is saved as an HF
+# `tokenizer.json` (the shape Hephaistos/gguf and llama.cpp read).
+cargo run -- train data/sample.txt 320 tokenizer.json
 
 # Encode / decode with it.
-cargo run -- encode model.json "the cat sat on the mat"   # -> 83 256 268 ...
-cargo run -- decode model.json 83 256 268 291 287 261 286 # -> the cat sat on the mat
+cargo run -- encode tokenizer.json "the cat sat on the mat"   # -> 83 256 268 ...
+cargo run -- decode tokenizer.json 83 256 268 291 287 261 286 # -> the cat sat on the mat
 ```
 
 As a library:
@@ -54,7 +55,7 @@ use cadmus::BpeModel;
 let model = BpeModel::train(&corpus, 8_000, 2);
 let ids = model.encode("hello world");
 assert_eq!(model.decode(&ids), "hello world");
-std::fs::write("model.json", model.to_json())?;
+std::fs::write("tokenizer.json", model.to_hf_json())?; // HF-shaped, gguf-ready
 ```
 
 ## Verifying it works
@@ -70,8 +71,17 @@ cargo test
 - **compression** — learned merges shrink a familiar sentence vs. pure bytes
 - **save/load** — a reloaded model encodes identically
 
-## Not (yet) done
+## Wired into Hephaistos
 
-The output isn't wired into Hephaistos as a drop-in for the `tokenizers` crate —
-that would mean emitting an HF-`tokenizer.json`-shaped file its `gguf.rs` already
-parses. Left as the natural next step.
+Cadmus **replaces** the HuggingFace `tokenizers` crate in
+[Hephaistos](https://github.com/Tsuskov/Hephaistos): its `data.rs` now trains and
+encodes via `cadmus::BpeModel`, and `to_hf_json` emits the exact
+`tokenizer.json` shape its `gguf.rs` parses (with a `<unk>` token injected, which
+byte-level BPE never actually emits but the GGUF writer requires). Verified both
+ways — Cadmus loads the old HF-written tokenizers and decodes their existing
+token bins, and `gguf.rs` parses a Cadmus-written tokenizer.
+
+Scope note: this is a *consistent* drop-in, not a byte-identical clone of the HF
+path. Cadmus uses a simplified pre-tokenizer (leading-space-attaches-to-word) and
+lexicographic tie-breaking, so it learns its own merges rather than reproducing
+HF's ids exactly — which is the point for a from-scratch stack.

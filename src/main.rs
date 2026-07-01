@@ -38,7 +38,7 @@ fn train(args: &[String]) {
     let vocab_size: usize = vocab_size.parse().unwrap_or_else(|_| usage());
 
     let model = BpeModel::train(&text, vocab_size, 2);
-    fs::write(out, model.to_json()).expect("write model");
+    fs::write(out, model.to_hf_json()).expect("write model");
     eprintln!(
         "trained {} tokens ({} merges) -> {out}",
         model.vocab_size(),
@@ -66,7 +66,7 @@ fn load(path: &str) -> BpeModel {
         eprintln!("cannot read {path}: {e}");
         exit(1);
     });
-    BpeModel::from_json(&json).unwrap_or_else(|e| {
+    BpeModel::from_hf_json(&json).unwrap_or_else(|e| {
         eprintln!("bad model {path}: {e}");
         exit(1);
     })
